@@ -4,7 +4,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
+	"net/http/httptest"
+	"net/http/httputil"
 	"net/url"
 	"path"
 	"sort"
@@ -1013,4 +1016,35 @@ func usernamePrompt(conn connector.PasswordConnector) string {
 		return attr
 	}
 	return "Username"
+}
+
+func (s *Server) debug(prefix string, h http.Handler) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		// Save a copy of this request for debugging.
+		requestDump, err := httputil.DumpRequest(r, true)
+		if err != nil {
+			s.logger.Println(prefix, err)
+		}
+		s.logger.Println(prefix, string(requestDump))
+
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, r)
+
+		dump, err := httputil.DumpResponse(rec.Result(), true)
+		if err != nil {
+			log.Fatal(err)
+		}
+		s.logger.Println(prefix, string(dump))
+
+		// we copy the captured response headers to our new response
+		for k, v := range rec.Header() {
+			w.Header()[k] = v
+		}
+
+		// grab the captured response body
+		data := rec.Body.Bytes()
+
+		w.WriteHeader(rec.Result().StatusCode)
+		w.Write(data)
+	}
 }

@@ -236,14 +236,15 @@ func newServer(ctx context.Context, c Config, rotationStrategy rotationStrategy)
 	if err != nil {
 		return nil, err
 	}
-	handleWithCORS("/.well-known/openid-configuration", discoveryHandler)
+	handleWithCORS("/.well-known/openid-configuration", s.debug("/.well-known/openid-configuration", http.HandlerFunc(discoveryHandler)))
 
 	// TODO(ericchiang): rate limit certain paths based on IP.
-	handleWithCORS("/token", s.handleToken)
-	handleWithCORS("/keys", s.handlePublicKeys)
-	handleFunc("/auth", s.handleAuthorization)
-	handleFunc("/auth/{connector}", s.handleConnectorLogin)
-	r.HandleFunc(path.Join(issuerURL.Path, "/callback"), func(w http.ResponseWriter, r *http.Request) {
+	handleWithCORS("/token", s.debug("/token", http.HandlerFunc(s.handleToken)))
+	handleWithCORS("/keys", s.debug("/keys", http.HandlerFunc(s.handlePublicKeys)))
+	handleFunc("/auth", s.debug("/auth", http.HandlerFunc(s.handleAuthorization)))
+	handleFunc("/auth/{connector}", s.debug("/auth/{connector}", http.HandlerFunc(s.handleConnectorLogin)))
+
+	callback := func(w http.ResponseWriter, r *http.Request) {
 		// Strip the X-Remote-* headers to prevent security issues on
 		// misconfigured authproxy connector setups.
 		for key := range r.Header {
@@ -252,14 +253,16 @@ func newServer(ctx context.Context, c Config, rotationStrategy rotationStrategy)
 			}
 		}
 		s.handleConnectorCallback(w, r)
-	})
+	}
+	r.HandleFunc(path.Join(issuerURL.Path, "/callback"), s.debug("/callback", http.HandlerFunc(callback)))
+
 	// For easier connector-specific web server configuration, e.g. for the
 	// "authproxy" connector.
-	handleFunc("/callback/{connector}", s.handleConnectorCallback)
-	handleFunc("/approval", s.handleApproval)
-	handleFunc("/healthz", s.handleHealth)
-	handlePrefix("/static", static)
-	handlePrefix("/theme", theme)
+	handleFunc("/callback/{connector}", s.debug("/callback/{connector}", http.HandlerFunc(s.handleConnectorCallback)))
+	handleFunc("/approval", s.debug("/approval", http.HandlerFunc(s.handleApproval)))
+	handleFunc("/healthz", s.debug("/healthz", http.HandlerFunc(s.handleHealth)))
+	handlePrefix("/static", s.debug("/static", static))
+	handlePrefix("/theme", s.debug("/theme", theme))
 	s.mux = r
 
 	s.startKeyRotation(ctx, rotationStrategy, now)

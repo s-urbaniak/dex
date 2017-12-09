@@ -12,6 +12,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"net/http/httputil"
 	"net/url"
 	"os"
@@ -73,7 +74,6 @@ func (d debugTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	if err != nil {
 		return nil, err
 	}
-	log.Printf("%s", reqDump)
 
 	resp, err := d.t.RoundTrip(req)
 	if err != nil {
@@ -85,8 +85,39 @@ func (d debugTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		resp.Body.Close()
 		return nil, err
 	}
-	log.Printf("%s", respDump)
+	log.Printf("OUTGOING\n%s\n%s", reqDump, respDump)
 	return resp, nil
+}
+
+func debugHandler(prefix string, h http.Handler) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		// Save a copy of this request for debugging.
+		requestDump, err := httputil.DumpRequest(r, true)
+		if err != nil {
+			log.Println(prefix, err)
+		}
+		log.Println(prefix, string(requestDump))
+
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, r)
+
+		dump, err := httputil.DumpResponse(rec.Result(), true)
+		if err != nil {
+			log.Fatal(err)
+		}
+		log.Println(prefix, string(dump))
+
+		// we copy the captured response headers to our new response
+		for k, v := range rec.Header() {
+			w.Header()[k] = v
+		}
+
+		// grab the captured response body
+		data := rec.Body.Bytes()
+
+		w.WriteHeader(rec.Result().StatusCode)
+		w.Write(data)
+	}
 }
 
 func cmd() *cobra.Command {
@@ -176,9 +207,9 @@ func cmd() *cobra.Command {
 			a.provider = provider
 			a.verifier = provider.Verifier(&oidc.Config{ClientID: a.clientID})
 
-			http.HandleFunc("/", a.handleIndex)
-			http.HandleFunc("/login", a.handleLogin)
-			http.HandleFunc(u.Path, a.handleCallback)
+			http.HandleFunc("/", debugHandler("INCOMING /", http.HandlerFunc(a.handleIndex)))
+			http.HandleFunc("/login", debugHandler("INCOMING /login", http.HandlerFunc(a.handleLogin)))
+			http.HandleFunc(u.Path, debugHandler(fmt.Sprintf("INCOMING %s", u.Path), http.HandlerFunc(a.handleCallback)))
 
 			switch listenURL.Scheme {
 			case "http":
@@ -249,10 +280,30 @@ func (a *app) handleLogin(w http.ResponseWriter, r *http.Request) {
 		authCodeURL = a.oauth2Config(scopes).AuthCodeURL(exampleAppState, oauth2.AccessTypeOffline)
 	}
 
-	http.Redirect(w, r, authCodeURL, http.StatusSeeOther)
+	reqDump, err := httputil.DumpRequest(r, true)
+	if err != nil {
+		log.Fatal(err)
+	}
+	log.Printf("%s", reqDump)
+
+	rec := httptest.NewRecorder()
+	http.Redirect(rec, r, authCodeURL, http.StatusSeeOther)
+
+	dump, err := httputil.DumpResponse(rec.Result(), true)
+	if err != nil {
+		log.Fatal(err)
+	}
+	log.Printf("%s", string(dump))
+
+	for k, v := range rec.Header() {
+		w.Header()[k] = v
+	}
+	w.WriteHeader(rec.Result().StatusCode)
+	w.Write(rec.Body.Bytes())
 }
 
 func (a *app) handleCallback(w http.ResponseWriter, r *http.Request) {
+	log.Println("CALLBACK")
 	var (
 		err   error
 		token *oauth2.Token
